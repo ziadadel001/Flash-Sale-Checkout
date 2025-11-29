@@ -1,59 +1,222 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Flash Sale E-commerce System
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+## Project Overview
 
-## About Laravel
+This project is an E-commerce system with a focus on **flash sale products**, atomic stock reservation, and webhook-based payment processing. It ensures:
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+* Real-time stock management with **atomic holds**.
+* Automatic expiration of holds.
+* Order creation from reserved holds.
+* Webhook handling for payment notifications.
+* Logging for auditing and debugging.
+* Unified API responses using a dedicated trait.
+* Validation separated from controllers via Form Requests.
+* Business logic separated into a service layer for cleaner controllers.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+---
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Features
 
-## Learning Laravel
+* **Products Management**
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+  * SKU, name, description, price, and stock tracking.
+  * JSON `metadata` for extra product info.
+  * Indexing on stock and name for fast queries.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+* **Holds (Stock Reservations)**
 
-## Laravel Sponsors
+  * Reserve stock atomically for a limited time.
+  * Status: `active`, `expired`, `consumed`.
+  * Unique token for each hold.
+  * Automatic expiration via scheduled jobs.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+* **Orders**
 
-### Premium Partners
+  * Created from valid holds.
+  * Status: `pending`, `paid`, `cancelled`, `failed`.
+  * Supports external payment IDs and JSON payment payloads.
+  * Stock commitment is atomic and idempotent.
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+* **Webhook Handling**
 
-## Contributing
+  * Receives external payment events.
+  * Idempotent processing.
+  * Processes `succeeded`, `failed`, `cancelled`, or `declined` statuses.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+* **Jobs**
 
-## Code of Conduct
+  * `ExpireHoldJob` — expires a single hold.
+  * `ForceExpireHoldsJob` — batch expire expired holds.
+  * `ProcessWebhookJob` — processes webhook events asynchronously.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+---
 
-## Security Vulnerabilities
+## Database Migrations
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### `products` table
 
-## License
+```php
+Schema::create('products', function (Blueprint $table) {
+    $table->id();
+    $table->string('sku')->nullable()->unique();
+    $table->string('name')->index();
+    $table->text('description')->nullable();
+    $table->decimal('price', 12, 2)->default(0);
+    $table->unsignedInteger('stock_total')->default(0);
+    $table->unsignedInteger('stock_reserved')->default(0);
+    $table->unsignedInteger('stock_sold')->default(0);
+    $table->json('metadata')->nullable();
+    $table->timestamps();
+    $table->index(['stock_total', 'stock_reserved', 'stock_sold'], 'products_stock_idx');
+});
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+### `holds` table
+
+```php
+Schema::create('holds', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('product_id')->constrained('products')->cascadeOnUpdate()->cascadeOnDelete();
+    $table->unsignedInteger('qty')->default(1);
+    $table->enum('status', ['active', 'expired', 'consumed'])->default('active');
+    $table->timestamp('expires_at')->nullable()->index();
+    $table->timestamp('used_at')->nullable();
+    $table->string('unique_token', 191)->nullable()->unique();
+    $table->json('metadata')->nullable();
+    $table->timestamps();
+    $table->index(['product_id', 'status'], 'holds_product_status_idx');
+    $table->index(['status', 'expires_at'], 'holds_status_expires_idx');
+});
+```
+
+### `orders` table
+
+```php
+Schema::create('orders', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('hold_id')->constrained('holds')->cascadeOnUpdate()->cascadeOnDelete();
+    $table->string('external_payment_id')->nullable()->index();
+    $table->enum('status', ['pending', 'paid', 'cancelled', 'failed'])->default('pending');
+    $table->decimal('amount', 12, 2)->default(0);
+    $table->json('payment_payload')->nullable();
+    $table->timestamps();
+    $table->unique('hold_id', 'orders_hold_unique');
+    $table->index(['status', 'created_at'], 'orders_status_created_idx');
+});
+```
+
+### `webhook_events` table
+
+```php
+Schema::create('webhook_events', function (Blueprint $table) {
+    $table->id();
+    $table->string('idempotency_key', 191)->unique();
+    $table->unsignedBigInteger('order_id')->nullable()->index();
+    $table->string('event_type')->nullable()->index();
+    $table->json('payload')->nullable();
+    $table->boolean('processed')->default(false)->index();
+    $table->enum('outcome', ['applied', 'skipped', 'failed', 'waiting_for_order'])->nullable();
+    $table->timestamp('processed_at')->nullable();
+    $table->timestamps();
+    $table->foreign('order_id')->references('id')->on('orders')->cascadeOnUpdate()->nullOnDelete();
+});
+```
+
+---
+
+## Seeders
+
+* `FlashSaleSeeder` creates a special limited stock flash sale product:
+
+```php
+Product::create([
+    'sku' => 'FLASH-SALE-2024',
+    'name' => 'Flash Sale Product',
+    'description' => 'Special limited stock product for flash sale',
+    'price' => 99.99,
+    'stock_total' => 100,
+    'stock_reserved' => 0,
+    'stock_sold' => 0,
+    'metadata' => [
+        'flash_sale' => true,
+        'sale_duration' => 3600,
+    ],
+]);
+```
+
+* `DatabaseSeeder` calls `TestUsersSeeder` and `FlashSaleSeeder`.
+
+---
+
+## Environment Setup
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/ziadadel001/Flash-Sale-Checkout.git
+```
+
+2. Install dependencies:
+
+```bash
+composer install
+```
+
+3. Copy `.env.example` to `.env` and configure:
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+4. Configure your database credentials in `.env`.
+
+5. Run migrations and seeders:
+
+```bash
+php artisan migrate --seed
+```
+
+6. Run the queue worker for scheduled and delayed jobs:
+
+```bash
+php artisan queue:work
+```
+
+7. Run the scheduler (for ForceExpireHoldsJob every minute):
+
+```bash
+php artisan schedule:run
+```
+
+---
+
+## API Endpoints
+
+* **Products**
+
+  * `GET /api/products` — List all in-stock products with pagination
+  * `GET /api/products/{id}` — Show a single product
+
+* **Holds**
+
+  * `POST /api/holds` — Create a hold for a product
+
+* **Orders**
+
+  * `POST /api/orders` — Create an order from a hold
+
+* **Webhooks**
+
+  * `POST /api/webhooks` — Receive external payment events (requires idempotency key)
+
+---
+
+## Notes
+
+* Stock management is **atomic** and prevents overselling.
+* Holds automatically expire after the TTL (default 2 minutes).
+* Webhooks are **idempotent**; duplicate events are ignored.
+* Logs are written for auditing all critical operations.
+
+
