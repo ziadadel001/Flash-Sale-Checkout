@@ -26,7 +26,6 @@ return new class extends Migration
             $table->unique('hold_id', 'orders_hold_unique');
 
             $table->index(['status', 'created_at'], 'orders_status_created_idx');
-            $table->index('external_payment_id');
         });
     }
 
