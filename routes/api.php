@@ -10,6 +10,6 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
-Route::post('holds', [HoldController::class, 'store']);
-Route::post('orders', [OrderController::class, 'store']);
+Route::post('holds', [HoldController::class, 'store'])->middleware('throttle:20,1');
+Route::post('orders', [OrderController::class, 'store'])->middleware('throttle:20,1');
 Route::post('webhooks', [WebhookController::class, 'handle']);

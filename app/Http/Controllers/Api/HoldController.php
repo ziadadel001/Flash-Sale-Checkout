@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
+use App\Http\Requests\StoreHoldRequest;
 use App\Services\HoldService;
 use Symfony\Component\HttpFoundation\Response;
 use App\Traits\ApiResponse;
@@ -16,19 +16,13 @@ class HoldController extends Controller
     {
     }
 
-    public function store(Request $req)
+    public function store(StoreHoldRequest $request)
     {
-        $data = $req->validate([
-            'product_id' => 'required|integer|exists:products,id',
-            'qty' => 'required|integer|min:1',
-            'ttl_minutes' => 'sometimes|integer|min:1|max:60',
-        ]);
-
         try {
             $hold = $this->service->createHold(
-                $data['product_id'],
-                $data['qty'],
-                $data['ttl_minutes'] ?? 2
+                $request->product_id,
+                $request->qty,
+                $request->ttl_minutes ?? 2
             );
 
             return $this->success([
