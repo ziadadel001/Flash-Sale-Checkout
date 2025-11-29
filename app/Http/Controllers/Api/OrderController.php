@@ -6,9 +6,12 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Services\OrderService;
 use Symfony\Component\HttpFoundation\Response;
+use App\Traits\ApiResponse;
 
 class OrderController extends Controller
 {
+    use ApiResponse;
+
     public function __construct(protected OrderService $service)
     {
     }
@@ -20,12 +23,20 @@ class OrderController extends Controller
             'external_payment_id' => 'sometimes|string',
         ]);
 
-        $order = $this->service->createOrderFromHold($data['hold_id'], $data['external_payment_id'] ?? null);
+        try {
+            $order = $this->service->createOrderFromHold(
+                $data['hold_id'],
+                $data['external_payment_id'] ?? null
+            );
 
-        return response()->json([
-            'order_id' => $order->id,
-            'status' => $order->status,
-            'amount' => $order->amount,
-        ], Response::HTTP_CREATED);
+            return $this->success([
+                'order_id' => $order->id,
+                'status' => $order->status,
+                'amount' => $order->amount,
+            ], Response::HTTP_CREATED);
+
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage(), Response::HTTP_BAD_REQUEST);
+        }
     }
 }

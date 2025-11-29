@@ -8,6 +8,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use App\Jobs\ExpireHoldJob;
+use Illuminate\Support\Facades\Log;
 
 class HoldService
 {
@@ -27,6 +28,11 @@ class HoldService
 
             $ok = $product->reserveStockAtomic($qty);
             if (! $ok) {
+                Log::warning('hold_failed_not_enough_stock', [
+                    'product_id' => $product->id,
+                    'requested_qty' => $qty,
+                    'available_stock' => $product->stock_total - $product->stock_reserved,
+                ]);
                 throw new \RuntimeException('not_enough_stock');
             }
 
@@ -36,6 +42,13 @@ class HoldService
                 'status' => 'active',
                 'expires_at' => now()->addMinutes($minutes),
                 'unique_token' => $uniqueToken ?? Str::uuid()->toString(),
+            ]);
+
+            Log::info('hold_created', [
+                'hold_id' => $hold->id,
+                'product_id' => $product->id,
+                'qty' => $qty,
+                'expires_at' => $hold->expires_at,
             ]);
 
             // Dispatch delayed job to expire the hold 
@@ -57,6 +70,11 @@ class HoldService
             $hold = Hold::where('id', $holdId)->lockForUpdate()->firstOrFail();
 
             if ($hold->status !== 'active' || $hold->expires_at->isPast()) {
+                Log::warning('hold_invalid_or_expired', [
+                    'hold_id' => $hold->id,
+                    'status' => $hold->status,
+                    'expires_at' => $hold->expires_at,
+                ]);
                 throw new \RuntimeException('invalid_or_expired_hold');
             }
 
@@ -64,6 +82,12 @@ class HoldService
             $hold->status = 'consumed';
             $hold->used_at = now();
             $hold->save();
+
+            Log::info('hold_consumed', [
+                'hold_id' => $hold->id,
+                'product_id' => $hold->product_id,
+                'user_id' => $hold->user_id ?? null,
+            ]);
 
             return $hold->refresh();
         }, 5);
@@ -77,9 +101,19 @@ class HoldService
     {
         return DB::transaction(function () use ($holdId) {
             $hold = Hold::where('id', $holdId)->lockForUpdate()->first();
-            if (! $hold) return false;
+            if (! $hold) {
+                Log::warning('hold_expire_skipped', [
+                    'hold_id' => $holdId,
+                    'current_status' => 'not_found',
+                ]);
+                return false;
+            }
 
             if ($hold->status !== 'active') {
+                Log::warning('hold_expire_skipped', [
+                    'hold_id' => $hold->id,
+                    'current_status' => $hold->status,
+                ]);
                 return false;
             }
 
@@ -90,6 +124,12 @@ class HoldService
 
             $hold->status = 'expired';
             $hold->save();
+
+            Log::info('hold_expired', [
+                'hold_id' => $hold->id,
+                'product_id' => $hold->product_id,
+                'qty' => $hold->qty,
+            ]);
 
             return true;
         }, 5);

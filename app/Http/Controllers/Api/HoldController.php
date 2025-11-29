@@ -6,9 +6,12 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Services\HoldService;
 use Symfony\Component\HttpFoundation\Response;
+use App\Traits\ApiResponse;
 
 class HoldController extends Controller
 {
+    use ApiResponse;
+
     public function __construct(protected HoldService $service)
     {
     }
@@ -21,11 +24,20 @@ class HoldController extends Controller
             'ttl_minutes' => 'sometimes|integer|min:1|max:60',
         ]);
 
-        $hold = $this->service->createHold($data['product_id'], $data['qty'], $data['ttl_minutes'] ?? 2);
+        try {
+            $hold = $this->service->createHold(
+                $data['product_id'],
+                $data['qty'],
+                $data['ttl_minutes'] ?? 2
+            );
 
-        return response()->json([
-            'hold_id' => $hold->id,
-            'expires_at' => $hold->expires_at,
-        ], Response::HTTP_CREATED);
+            return $this->success([
+                'hold_id' => $hold->id,
+                'expires_at' => $hold->expires_at,
+            ], Response::HTTP_CREATED);
+
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage(), Response::HTTP_BAD_REQUEST);
+        }
     }
 }

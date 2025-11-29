@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\WebhookEvent;
 use App\Models\Order;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use App\Jobs\ProcessWebhookJob;
 
 class WebhookService
@@ -16,56 +17,68 @@ class WebhookService
      */
     public function handleIncoming(string $idempotencyKey, array $payload): WebhookEvent
     {
-        // Use firstOrCreate to ensure idempotency at DB level (unique constraint on idempotency_key)
-        $webhook = null;
-        try {
-            $webhook = WebhookEvent::create([
-                'idempotency_key' => $idempotencyKey,
-                'order_id' => $payload['order_id'] ?? null,
+        $webhook = WebhookEvent::firstOrCreate(
+            ['idempotency_key' => $idempotencyKey],
+            [
+                'order_id'   => $payload['order_id'] ?? null,
                 'event_type' => $payload['type'] ?? null,
-                'payload' => $payload,
-                'processed' => false,
+                'payload'    => $payload,
+                'processed'  => false,
+            ]
+        );
+
+        if ($webhook->wasRecentlyCreated) {
+            Log::info('webhook_received', [
+                'webhook_id' => $webhook->id,
+                'idempotency_key' => $idempotencyKey,
             ]);
-        } catch (\Illuminate\Database\QueryException $e) {
-            // unique constraint violation => event already exists
-            $webhook = WebhookEvent::where('idempotency_key', $idempotencyKey)->first();
-            if (! $webhook) {
-                throw $e;
-            }
-            // If it's already processed, return it
-            if ($webhook->processed) {
-                return $webhook;
-            }
+        } else {
+            Log::warning('webhook_duplicate', [
+                'webhook_id' => $webhook->id,
+                'idempotency_key' => $idempotencyKey,
+            ]);
         }
 
-        // Dispatch job to process the webhook (idempotent processing)
-        ProcessWebhookJob::dispatch($webhook->id);
+        // Dispatch job to process the webhook 
+        if (! $webhook->processed) {
+            ProcessWebhookJob::dispatch($webhook->id);
+        }
 
         return $webhook;
     }
 
     /**
-     * Synchronous small helper to process payload .
+     * Synchronous small helper to process payload.
      * Returns outcome: 'applied' | 'waiting_for_order' | 'skipped' | 'failed'
      */
     public function process(WebhookEvent $webhook): string
     {
         if ($webhook->processed) {
+            Log::info('webhook_skipped', [
+                'webhook_id' => $webhook->id,
+            ]);
             return 'skipped';
         }
 
         return DB::transaction(function () use ($webhook) {
             $w = WebhookEvent::where('id', $webhook->id)->lockForUpdate()->first();
 
-            if (! $w || $w->processed) return 'skipped';
+            if (! $w || $w->processed) {
+                Log::info('webhook_skipped', [
+                    'webhook_id' => $webhook->id,
+                ]);
+                return 'skipped';
+            }
 
             $payload = $w->payload ?? [];
-
             $orderId = $w->order_id ?? ($payload['order_id'] ?? null);
 
             if (! $orderId) {
                 $w->outcome = 'waiting_for_order';
                 $w->save();
+                Log::warning('webhook_waiting_for_order', [
+                    'webhook_id' => $w->id,
+                ]);
                 return 'waiting_for_order';
             }
 
@@ -73,10 +86,13 @@ class WebhookService
             if (! $order) {
                 $w->outcome = 'waiting_for_order';
                 $w->save();
+                Log::warning('webhook_waiting_for_order', [
+                    'webhook_id' => $w->id,
+                    'order_id' => $orderId,
+                ]);
                 return 'waiting_for_order';
             }
 
-            // Decide by payload: example payload.status = succeeded | failed
             $status = $payload['status'] ?? null;
 
             if ($status === 'succeeded') {
@@ -85,6 +101,11 @@ class WebhookService
                 $w->processed = true;
                 $w->processed_at = now();
                 $w->save();
+                Log::info('webhook_processed', [
+                    'webhook_id' => $w->id,
+                    'order_id' => $order->id,
+                    'status' => 'succeeded',
+                ]);
                 return 'applied';
             }
 
@@ -94,6 +115,11 @@ class WebhookService
                 $w->processed = true;
                 $w->processed_at = now();
                 $w->save();
+                Log::warning('webhook_processed_failed', [
+                    'webhook_id' => $w->id,
+                    'order_id' => $order->id,
+                    'status' => $status,
+                ]);
                 return 'applied';
             }
 
@@ -101,6 +127,11 @@ class WebhookService
             $w->processed = true;
             $w->processed_at = now();
             $w->save();
+            Log::error('webhook_failed', [
+                'webhook_id' => $w->id,
+                'order_id' => $orderId,
+                'status' => $status,
+            ]);
             return 'failed';
         }, 5);
     }
