@@ -30,8 +30,20 @@ class HoldController extends Controller
                 'expires_at' => $hold->expires_at,
             ], Response::HTTP_CREATED);
 
-        } catch (\Exception $e) {
-            return $this->error($e->getMessage(), Response::HTTP_BAD_REQUEST);
+       } catch (\RuntimeException $e) {
+        $msg = $e->getMessage();
+        if ($msg === 'not_enough_stock') {
+            return $this->error('not_enough_stock', Response::HTTP_CONFLICT);
         }
+
+        if ($msg === 'invalid_or_expired_hold') {
+            return $this->error('hold_expired', Response::HTTP_GONE);
+        }
+
+        // default
+        return $this->error($msg, Response::HTTP_BAD_REQUEST);
+    } catch (\Throwable $e) {
+        return $this->error('internal_error', Response::HTTP_INTERNAL_SERVER_ERROR);
+    }
     }
 }

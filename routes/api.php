@@ -20,5 +20,8 @@ Route::prefix('products')->group(function () {
 
 
 Route::post('holds', [HoldController::class, 'store'])->middleware('throttle:20,1');
+
 Route::post('orders', [OrderController::class, 'store'])->middleware('throttle:20,1');
+Route::get('orders/{order}', [OrderController::class, 'show'])->middleware('throttle:20,1');
+
 Route::post('webhooks', [WebhookController::class, 'handle']);
