@@ -220,3 +220,69 @@ php artisan schedule:run
 * Logs are written for auditing all critical operations.
 
 
+# Tests
+
+This project includes a comprehensive test suite to validate atomic stock reservation, hold expiry, and order creation. All tests are written using Laravel's built-in testing framework and follow strict concurrency-safe patterns.
+
+## Test Coverage
+
+The test suite covers the following critical areas:
+
+### Concurrent Holds
+- Ensures parallel hold attempts cannot oversell stock
+- Validates database-level atomicity of reservations
+- Confirms API-level race conditions are handled correctly
+
+### Hold Expiry
+- Expired holds correctly release stock
+- Expiry operation is idempotent (safe to run multiple times)
+- Batch expiration using the holds:expire-old command
+
+### Order Creation
+- Orders can only be created from active holds
+- Order creation commits stock atomically
+- Ensures consumed or expired holds cannot be reused
+
+## Test Files Included
+
+### 1. ConcurrentHoldTest.php
+Validates:
+- No overselling under 15 parallel attempts
+- Stock reserved never exceeds product total
+- API hold creation returns correct status codes
+- Hold creation remains atomic under load
+
+### 2. HoldExpiryTest.php
+Validates:
+- Expired holds correctly release reserved stock
+- Expiry is safe and idempotent
+- Consumed holds cannot be expired
+- The holds:expire-old command processes all old holds
+
+### 3. OrderCreationTest.php
+Validates:
+- Orders are created only from valid, active holds
+- Stock moves from "reserved" to "sold" at checkout
+- Hold status changes to consumed after order creation
+- Prevents duplicate orders from the same hold
+
+## Running Tests
+
+Run the full test suite:
+php artisan test
+
+Run a specific test file:
+php artisan test --filter=ConcurrentHoldTest
+
+Run with real-time output:
+php artisan test -v
+
+## Summary
+
+These tests ensure that:
+- Stock is never oversold (even under heavy concurrency)
+- Holds behave consistently (expire safely & atomically)
+- Orders are created with strict validation
+- All business logic remains deterministic and race-condition proof
+
+This guarantees the Flash Sale System remains reliable even under extreme load.
